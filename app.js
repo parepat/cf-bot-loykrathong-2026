@@ -32,7 +32,7 @@ function saveEntry(){
     status.textContent='กรุณาตรวจสอบ Apps Script URL ใน config.js';return;
   }
   status.textContent='กำลังบันทึกชื่อและผลการเล่น...';
-  const id=crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const id=(globalThis.crypto&&typeof crypto.randomUUID==='function')?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}`;
   state.requestId=id;state.saved=false;
   const frame=document.createElement('iframe');frame.name='cf-save-'+id;frame.title='ช่องส่งผลกิจกรรม';frame.hidden=true;document.body.appendChild(frame);
   const form=document.createElement('form');form.method='POST';form.action=cfg.APPS_SCRIPT_URL;form.target=frame.name;form.style.display='none';
@@ -54,50 +54,76 @@ function saveEntry(){
   setTimeout(()=>{if(!done&&state.requestId===id){window.removeEventListener('message',listener);if(!state.saved)status.textContent='ยังไม่ได้รับการยืนยันจาก Google Sheets กรุณาให้ผู้ดูแลตรวจสอบ';cleanup()}},20000);
 }
 function finish(){if(state.finished)return;state.finished=true;$('scene').classList.add('floating');$('sceneCaption').textContent='✦ ปล่อยความสุขไปกับสายน้ำ ✦';$('floatBtn').hidden=true;$('floatHint').textContent='ขอให้คืนนี้เต็มไปด้วยความทรงจำที่งดงาม';saveEntry();setTimeout(()=>{$('resultPanel').hidden=false;$('blessing').textContent='ขอให้คำอธิษฐานของคุณเป็นจริง และทุกวันเป็นวันที่งดงาม';$('resultPanel').scrollIntoView({behavior:'smooth',block:'nearest'})},3000)}
-// Draw text without crossing the safe margins of a fixed 1080 x 1350 PNG.
-function fitCanvasText(g,text,x,y,maxWidth,size,minSize=22,weight='500',color='#fff3e6'){
-  g.save();g.textAlign='center';g.fillStyle=color;
-  let fontSize=size;
-  do{g.font=`${weight} ${fontSize}px Kanit, Prompt, sans-serif`;if(g.measureText(text).width<=maxWidth)break;fontSize-=2}while(fontSize>minSize);
-  g.fillText(text,x,y,maxWidth);g.restore();
+// Keep every card text segment inside 1080px. Canvas maxWidth behavior differs
+// across Thai fonts/browsers, so explicitly scale measured text if necessary.
+function cardFont(g,size,weight='400') {
+  g.font=`${weight} ${size}px Kanit, Prompt, 'Noto Sans Thai', sans-serif`;
 }
-function wrappedCanvasLines(g,text,maxWidth){
-  const blocks=String(text).split(/\n/);const lines=[];
-  for(const block of blocks){let line='';for(const ch of Array.from(block)){if(line&&g.measureText(line+ch).width>maxWidth){lines.push(line);line=ch}else{line+=ch}}lines.push(line||' ')}
-  return lines;
-}
-function drawWishOnCard(g,wish){
-  const maxWidth=850,maxLines=5,top=770,bottom=1050;
-  let fontSize=42,lines=[];
-  for(;fontSize>=26;fontSize-=2){
-    g.font=`400 ${fontSize}px Kanit, Prompt, sans-serif`;
-    lines=wrappedCanvasLines(g,wish,maxWidth);
-    const lineHeight=Math.round(fontSize*1.55);
-    if(lines.length<=maxLines&&lines.length*lineHeight<=bottom-top)break;
+function splitCardLines(g,value,maxWidth){
+  const result=[];
+  const text=String(value||'');
+  const segments=typeof Intl!=='undefined'&&Intl.Segmenter
+    ? Array.from(new Intl.Segmenter('th',{granularity:'grapheme'}).segment(text),x=>x.segment)
+    : Array.from(text);
+  let line='';
+  for(const cluster of segments){
+    if(cluster==='\n'){result.push(line);line='';continue}
+    if(line&&g.measureText(line+cluster).width>maxWidth){result.push(line.trim());line=cluster}
+    else line+=cluster;
   }
-  fontSize=Math.max(26,fontSize);
-  g.font=`400 ${fontSize}px Kanit, Prompt, sans-serif`;
-  lines=wrappedCanvasLines(g,wish,maxWidth);
-  if(lines.length>maxLines){lines=lines.slice(0,maxLines);let last=lines[maxLines-1];while(last.length&&g.measureText(last+'…').width>maxWidth)last=last.slice(0,-1);lines[maxLines-1]=last+'…'}
-  const step=Math.round(fontSize*1.55);
-  g.save();g.textAlign='center';g.textBaseline='middle';g.fillStyle='#fff3e6';
-  const center=(top+bottom)/2;
-  lines.forEach((line,i)=>g.fillText(line,540,center+(i-(lines.length-1)/2)*step,maxWidth));
+  if(line||!result.length)result.push(line.trim());
+  return result;
+}
+function drawCardText(g,text,opts={}){
+  const {centerY=700,width=850,maxLines=2,size=48,minSize=22,
+    weight='400',color='#fff3e6',lineHeight=1.4}=opts;
+  let lines=[],fontSize=minSize;
+  for(let trial=size;trial>=minSize;trial-=2){
+    cardFont(g,trial,weight);
+    const found=splitCardLines(g,text,width);
+    if(found.length<=maxLines){fontSize=trial;lines=found;break}
+  }
+  cardFont(g,fontSize,weight);
+  if(!lines.length)lines=splitCardLines(g,text,width);
+  if(lines.length>maxLines){
+    lines=lines.slice(0,maxLines);
+    let last=lines[maxLines-1];
+    while(last.length&&g.measureText(last+'…').width>width)last=last.slice(0,-1);
+    lines[maxLines-1]=last+'…';
+  }
+  g.save();
+  g.textAlign='center';g.textBaseline='middle';g.fillStyle=color;
+  const advance=fontSize*lineHeight;
+  lines.forEach((line,i)=>{
+    const measured=Math.max(1,g.measureText(line).width);
+    const fit=Math.min(1,width/measured);
+    g.save();
+    g.translate(540,centerY+(i-(lines.length-1)/2)*advance);
+    g.scale(fit,1);
+    g.fillText(line,0,0);
+    g.restore();
+  });
   g.restore();
 }
 function card(){
   const c=document.createElement('canvas');c.width=1080;c.height=1350;
   const g=c.getContext('2d');
-  const bg=g.createLinearGradient(0,0,0,1350);bg.addColorStop(0,'#241338');bg.addColorStop(.65,'#3d2b67');bg.addColorStop(1,'#174b70');g.fillStyle=bg;g.fillRect(0,0,c.width,c.height);
+  const bg=g.createLinearGradient(0,0,0,1350);
+  bg.addColorStop(0,'#241338');bg.addColorStop(.65,'#3d2b67');bg.addColorStop(1,'#174b70');
+  g.fillStyle=bg;g.fillRect(0,0,1080,1350);
   let seed=13;const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647};
-  for(let i=0;i<115;i++){g.fillStyle=`rgba(255,237,180,${rnd()*.6})`;g.beginPath();g.arc(rnd()*1080,rnd()*1050,rnd()*3+.6,0,Math.PI*2);g.fill()}
-  g.shadowColor='#ffe3a6';g.shadowBlur=70;g.fillStyle='#ffe5ad';g.beginPath();g.arc(785,260,106,0,Math.PI*2);g.fill();g.shadowBlur=0;
-  fitCanvasText(g,'CF BOT  •  LOY KRATHONG 2026',540,105,890,29,20,'500','#e2beea');
-  drawKrathong(g,540,490,2.1);
-  fitCanvasText(g,'สุขสันต์วันลอยกระทง',540,685,930,76,37,'600','#ffe6a6');
-  drawWishOnCard(g,state.wish);
-  fitCanvasText(g,'ขอให้ความสุขและความหวังเดินทางไปกับแสงจันทร์',540,1140,900,31,21,'400','#f3d2a4');
-  fitCanvasText(g,'✦  ส่งความสุขจาก CF BOT  ✦',540,1250,900,27,20,'400','#f3d2a4');
+  for(let i=0;i<115;i++){
+    g.fillStyle=`rgba(255,237,180,${rnd()*.6})`;
+    g.beginPath();g.arc(rnd()*1080,rnd()*1050,rnd()*3+.6,0,Math.PI*2);g.fill();
+  }
+  g.shadowColor='#ffe3a6';g.shadowBlur=70;g.fillStyle='#ffe5ad';
+  g.beginPath();g.arc(785,260,106,0,Math.PI*2);g.fill();g.shadowBlur=0;
+  drawCardText(g,'CF BOT • LOY KRATHONG 2026',{centerY:100,width:900,maxLines:1,size:30,minSize:24,weight:'500',color:'#e2beea'});
+  drawKrathong(g,540,460,1.7);
+  drawCardText(g,'สุขสันต์วันลอยกระทง',{centerY:680,width:840,maxLines:2,size:72,minSize:40,weight:'600',color:'#ffe6a6',lineHeight:1.24});
+  drawCardText(g,state.wish,{centerY:905,width:830,maxLines:4,size:40,minSize:24,weight:'400',color:'#fff3e6',lineHeight:1.48});
+  drawCardText(g,'ขอให้ความสุขและความหวังเดินทางไปกับแสงจันทร์',{centerY:1143,width:820,maxLines:2,size:30,minSize:22,weight:'400',color:'#f3d2a4'});
+  drawCardText(g,'✦  ส่งความสุขจาก CF BOT  ✦',{centerY:1254,width:880,maxLines:1,size:27,minSize:21,weight:'400',color:'#f3d2a4'});
   return c;
 }
 function drawKrathong(g,x,y,s){g.save();g.translate(x,y);g.scale(s,s);g.fillStyle='#4d864e';g.beginPath();g.moveTo(-130,16);g.quadraticCurveTo(0,112,130,16);g.quadraticCurveTo(0,45,-130,16);g.fill();const cols=palette[state.flower];[-90,-55,-20,20,55,90].forEach((v,i)=>{g.fillStyle=cols[i%3];g.beginPath();g.moveTo(v,20);g.quadraticCurveTo(v-37,-65,v-9,-63);g.quadraticCurveTo(v+25,-53,v+12,20);g.fill()});g.fillStyle='#fff0d2';g.fillRect(-5,-54,10,65);g.fillStyle='#ffe18b';g.beginPath();g.ellipse(0,-67,9,18,0,0,Math.PI*2);g.fill();g.restore()}
