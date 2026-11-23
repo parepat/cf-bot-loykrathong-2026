@@ -54,82 +54,50 @@ function saveEntry(){
   setTimeout(()=>{if(!done&&state.requestId===id){window.removeEventListener('message',listener);if(!state.saved)status.textContent='ยังไม่ได้รับการยืนยันจาก Google Sheets กรุณาให้ผู้ดูแลตรวจสอบ';cleanup()}},20000);
 }
 function finish(){if(state.finished)return;state.finished=true;$('scene').classList.add('floating');$('sceneCaption').textContent='✦ ปล่อยความสุขไปกับสายน้ำ ✦';$('floatBtn').hidden=true;$('floatHint').textContent='ขอให้คืนนี้เต็มไปด้วยความทรงจำที่งดงาม';saveEntry();setTimeout(()=>{$('resultPanel').hidden=false;$('blessing').textContent='ขอให้คำอธิษฐานของคุณเป็นจริง และทุกวันเป็นวันที่งดงาม';$('resultPanel').scrollIntoView({behavior:'smooth',block:'nearest'})},3000)}
-// PNG card layout: explicit left-positioned measured text prevents Thai glyphs
-// being cropped in mobile canvas implementations with inconsistent textAlign.
-function cardFont(g,size,weight='400'){
-  g.font=`${weight} ${size}px Kanit, Prompt, 'Noto Sans Thai', sans-serif`;
+// Draw text without crossing the safe margins of a fixed 1080 x 1350 PNG.
+function fitCanvasText(g,text,x,y,maxWidth,size,minSize=22,weight='500',color='#fff3e6'){
+  g.save();g.textAlign='center';g.fillStyle=color;
+  let fontSize=size;
+  do{g.font=`${weight} ${fontSize}px Kanit, Prompt, sans-serif`;if(g.measureText(text).width<=maxWidth)break;fontSize-=2}while(fontSize>minSize);
+  g.fillText(text,x,y,maxWidth);g.restore();
 }
-function splitCardLines(g,value,maxWidth){
-  const paragraphs=String(value||'').split(/\r?\n/);
-  const result=[];
-  // Use grapheme clusters to avoid splitting Thai vowels/combining marks.
-  const graphemes=(s)=>{
-    if(typeof Intl!=='undefined' && Intl.Segmenter){
-      return Array.from(new Intl.Segmenter('th',{granularity:'grapheme'}).segment(s),x=>x.segment);
-    }
-    return Array.from(s);
-  };
-  for(const paragraph of paragraphs){
-    if(!paragraph){result.push(' ');continue}
-    let line='';
-    for(const cluster of graphemes(paragraph)){
-      if(line && g.measureText(line+cluster).width>maxWidth){
-        result.push(line.trim());line=cluster;
-      }else line+=cluster;
-    }
-    if(line)result.push(line.trim());
-  }
-  return result.length?result:[' '];
+function wrappedCanvasLines(g,text,maxWidth){
+  const blocks=String(text).split(/\n/);const lines=[];
+  for(const block of blocks){let line='';for(const ch of Array.from(block)){if(line&&g.measureText(line+ch).width>maxWidth){lines.push(line);line=ch}else{line+=ch}}lines.push(line||' ')}
+  return lines;
 }
-function drawMeasuredLine(g,text,y,width=860){
-  const measured=g.measureText(text).width;
-  const start=Math.max(80,(1080-measured)/2);
-  g.textAlign='left';
-  g.fillText(text,start,y,Math.min(width,1080-2*80));
-}
-function drawCardText(g,text,opts={}){
-  const {centerY=700,width=850,maxLines=2,size=48,minSize=22,weight='400',color='#fff3e6',lineHeight=1.4}=opts;
-  let lines=[];let chosen=minSize;
-  for(let px=size;px>=minSize;px-=2){
-    cardFont(g,px,weight);
-    const test=splitCardLines(g,text,width);
-    if(test.length<=maxLines){chosen=px;lines=test;break}
+function drawWishOnCard(g,wish){
+  const maxWidth=850,maxLines=5,top=770,bottom=1050;
+  let fontSize=42,lines=[];
+  for(;fontSize>=26;fontSize-=2){
+    g.font=`400 ${fontSize}px Kanit, Prompt, sans-serif`;
+    lines=wrappedCanvasLines(g,wish,maxWidth);
+    const lineHeight=Math.round(fontSize*1.55);
+    if(lines.length<=maxLines&&lines.length*lineHeight<=bottom-top)break;
   }
-  cardFont(g,chosen,weight);
-  if(!lines.length)lines=splitCardLines(g,text,width);
-  if(lines.length>maxLines){
-    lines=lines.slice(0,maxLines);
-    let last=lines[maxLines-1];
-    while(last && g.measureText(last+'…').width>width)last=last.slice(0,-1);
-    lines[maxLines-1]=last+'…';
-  }
-  g.save();
-  g.textBaseline='middle';g.fillStyle=color;
-  const advance=chosen*lineHeight;
-  for(let i=0;i<lines.length;i++){
-    drawMeasuredLine(g,lines[i],centerY+(i-(lines.length-1)/2)*advance,width);
-  }
+  fontSize=Math.max(26,fontSize);
+  g.font=`400 ${fontSize}px Kanit, Prompt, sans-serif`;
+  lines=wrappedCanvasLines(g,wish,maxWidth);
+  if(lines.length>maxLines){lines=lines.slice(0,maxLines);let last=lines[maxLines-1];while(last.length&&g.measureText(last+'…').width>maxWidth)last=last.slice(0,-1);lines[maxLines-1]=last+'…'}
+  const step=Math.round(fontSize*1.55);
+  g.save();g.textAlign='center';g.textBaseline='middle';g.fillStyle='#fff3e6';
+  const center=(top+bottom)/2;
+  lines.forEach((line,i)=>g.fillText(line,540,center+(i-(lines.length-1)/2)*step,maxWidth));
   g.restore();
 }
 function card(){
   const c=document.createElement('canvas');c.width=1080;c.height=1350;
   const g=c.getContext('2d');
-  const bg=g.createLinearGradient(0,0,0,1350);
-  bg.addColorStop(0,'#241338');bg.addColorStop(.65,'#3d2b67');bg.addColorStop(1,'#174b70');
-  g.fillStyle=bg;g.fillRect(0,0,c.width,c.height);
+  const bg=g.createLinearGradient(0,0,0,1350);bg.addColorStop(0,'#241338');bg.addColorStop(.65,'#3d2b67');bg.addColorStop(1,'#174b70');g.fillStyle=bg;g.fillRect(0,0,c.width,c.height);
   let seed=13;const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647};
-  for(let i=0;i<115;i++){
-    g.fillStyle=`rgba(255,237,180,${rnd()*.6})`;
-    g.beginPath();g.arc(rnd()*1080,rnd()*1050,rnd()*3+.6,0,Math.PI*2);g.fill();
-  }
-  g.shadowColor='#ffe3a6';g.shadowBlur=70;g.fillStyle='#ffe5ad';
-  g.beginPath();g.arc(785,260,106,0,Math.PI*2);g.fill();g.shadowBlur=0;
-  drawCardText(g,'CF BOT • LOY KRATHONG 2026',{centerY:100,width:900,maxLines:1,size:30,minSize:24,weight:'500',color:'#e2beea'});
+  for(let i=0;i<115;i++){g.fillStyle=`rgba(255,237,180,${rnd()*.6})`;g.beginPath();g.arc(rnd()*1080,rnd()*1050,rnd()*3+.6,0,Math.PI*2);g.fill()}
+  g.shadowColor='#ffe3a6';g.shadowBlur=70;g.fillStyle='#ffe5ad';g.beginPath();g.arc(785,260,106,0,Math.PI*2);g.fill();g.shadowBlur=0;
+  fitCanvasText(g,'CF BOT  •  LOY KRATHONG 2026',540,105,890,29,20,'500','#e2beea');
   drawKrathong(g,540,490,2.1);
-  drawCardText(g,'สุขสันต์วันลอยกระทง',{centerY:690,width:890,maxLines:2,size:76,minSize:48,weight:'600',color:'#ffe6a6',lineHeight:1.3});
-  drawCardText(g,state.wish,{centerY:900,width:850,maxLines:5,size:43,minSize:24,weight:'400',color:'#fff3e6',lineHeight:1.6});
-  drawCardText(g,'ขอให้ความสุขและความหวังเดินทางไปกับแสงจันทร์',{centerY:1135,width:870,maxLines:2,size:31,minSize:22,weight:'400',color:'#f3d2a4'});
-  drawCardText(g,'✦  ส่งความสุขจาก CF BOT  ✦',{centerY:1250,width:880,maxLines:1,size:27,minSize:21,weight:'400',color:'#f3d2a4'});
+  fitCanvasText(g,'สุขสันต์วันลอยกระทง',540,685,930,76,37,'600','#ffe6a6');
+  drawWishOnCard(g,state.wish);
+  fitCanvasText(g,'ขอให้ความสุขและความหวังเดินทางไปกับแสงจันทร์',540,1140,900,31,21,'400','#f3d2a4');
+  fitCanvasText(g,'✦  ส่งความสุขจาก CF BOT  ✦',540,1250,900,27,20,'400','#f3d2a4');
   return c;
 }
 function drawKrathong(g,x,y,s){g.save();g.translate(x,y);g.scale(s,s);g.fillStyle='#4d864e';g.beginPath();g.moveTo(-130,16);g.quadraticCurveTo(0,112,130,16);g.quadraticCurveTo(0,45,-130,16);g.fill();const cols=palette[state.flower];[-90,-55,-20,20,55,90].forEach((v,i)=>{g.fillStyle=cols[i%3];g.beginPath();g.moveTo(v,20);g.quadraticCurveTo(v-37,-65,v-9,-63);g.quadraticCurveTo(v+25,-53,v+12,20);g.fill()});g.fillStyle='#fff0d2';g.fillRect(-5,-54,10,65);g.fillStyle='#ffe18b';g.beginPath();g.ellipse(0,-67,9,18,0,0,Math.PI*2);g.fill();g.restore()}
@@ -143,4 +111,5 @@ async function shareLine(){
    toast('โปรดบันทึกการ์ด PNG แล้วส่งรูปผ่าน LINE');
  }catch(e){if(e.name!=='AbortError')toast('แชร์ไม่สำเร็จ ให้บันทึกการ์ด PNG แล้วแชร์ใน LINE')}
 }
-function reset(){state.finished=false;state.saved=false;state.base='banana';state.flower='pink';state.wish='ขอให้ทุกวันเต็มไปด้วยความสุขและรอยยิ้ม';$('wishText').value=state.wish;$('scene').classList.remove('floating');$('sceneCaption').textContent='✦ สร้างกระทงในแบบของคุณ ✦';$('floatBtn').hidden=false;$('resultPanel').hidden=true;$('saveStatus').textContent='';document.querySelectorAll('[data-kind]').forEach(b=>b.classList.toggle('selected',b.dataset.value===(b.dataset.kind==='base'?'banana':'pink')));document.querySelectorAll('[data-wish]').forEac
+function reset(){state.finished=false;state.saved=false;state.base='banana';state.flower='pink';state.wish='ขอให้ทุกวันเต็มไปด้วยความสุขและรอยยิ้ม';$('wishText').value=state.wish;$('scene').classList.remove('floating');$('sceneCaption').textContent='✦ สร้างกระทงในแบบของคุณ ✦';$('floatBtn').hidden=false;$('resultPanel').hidden=true;$('saveStatus').textContent='';document.querySelectorAll('[data-kind]').forEach(b=>b.classList.toggle('selected',b.dataset.value===(b.dataset.kind==='base'?'banana':'pink')));document.querySelectorAll('[data-wish]').forEach(b=>b.classList.toggle('selected',b.dataset.wish===state.wish));updateKrathong();updateWish();setStep(0)}
+function boot(){bindDesign();initWishes();updateKrathong();$('toWish').onclick=()=>setStep(1);$('backBuild').onclick=()=>setStep(0);$('toFloat').onclick=()=>{if(validInput())setStep(2)};$('floatBtn').onclick=finish;$('downloadBtn').onclick=savePng;$('shareBtn').onclick=shareLine;$('restartBtn').onclick=reset;$('beginBtn').onclick=register;$('modeBadge').textContent=cfg.APPS_SCRIPT_URL?'พร้อมบันทึกผล':'โหมดทดลองเล่น';$('registrationMode').textContent=cfg.APPS_SCRIPT_URL?'เมื่อเล่นจบ ระบบจะส่งข้อมูลเพื่อบันทึกหลังผ่านการตรวจรายชื่อที่อนุญาต':'โหมดทดลอง: ข้อมูลที่กรอกจะไม่ถูกส่งหรือบันทึกบนเซิร์ฟเวอร์'};document.addEventListener('DOMContentLoaded',boot);
